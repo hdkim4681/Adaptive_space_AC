@@ -1,0 +1,120 @@
+clear all; close all; clc;
+Lx=0; Rx=2; Ly=0; Ry=1; % Domain definition
+% Global grid size and step size
+GNx=200; h=(Rx-Lx)/GNx; GNy=round((Ry-Ly)/h);
+% Generate uniform global grid points in x and y
+x=linspace(Lx+0.5*h, Rx-0.5*h, GNx);
+y=linspace(Ly+0.5*h, Ry-0.5*h, GNy);
+% Time step size and interfacial parameter
+dt=0.45*h^2; m=8; epsilon = m*h/(2*sqrt(2)*atanh(0.9));
+% Set random initial condition for phi in [-0.01, 0.01]
+for i=1:GNx
+    for j=1:GNy
+        phi0(i,j)=0.01*(2*rand(1)-1);
+    end
+end
+% Identify regions near the interface and add buffer
+xt=[]; yt=[]; bf=1; % buffer size
+for i=1:GNx
+    for j=1:GNy
+        if abs(phi0(i,j))<0.98
+         ii=round((x(i)-Lx)/h+0.5);
+         jj=round((y(j)-Ly)/h+0.5);
+         xt=[xt max(ii-bf,1):min(ii+bf,GNx)];
+         yt=[yt max(jj-bf,1):min(jj+bf,GNy)];
+        end
+    end
+end
+% Background coarse grid sampling
+s=4; bgx=[1:s:GNx GNx]; bgy=[1:s:GNy GNy];
+% Merge tagged and background grids
+xt=unique([xt bgx]); yt=unique([yt bgy]);
+% Plot initial condition
+newx=x(xt); newy=y(yt); phi1=phi0(xt,yt);
+[xx,yy]=meshgrid(newx,newy);
+figure(1); clf; mesh(xx,yy,phi1'); view(-13,77)
+axis([Lx Rx Ly Ry -1 1]); axis image;
+figure(2); clf; mesh(xx,yy,phi1'); view(0,90); axis image;
+Nx=length(newx); Ny=length(newy);
+% Main loop parameters
+Nt=3000;     % Total time steps
+remesh=20;    % Remeshing interval
+ns=100;       % Plotting interval
+% Main iteration loop
+for iter = 1:Nt
+    if mod(iter, remesh)==0 || iter==1 % Remeshing condition
+        if iter>1  % Recompute active region based on interface
+            xt=[]; yt=[];
+            for i=1:Nx
+                for j=1:Ny
+                    if abs(phi1(i,j))<0.98
+                        ii=round((newx(i)-Lx)/h+0.5);
+                        jj=round((newy(j)-Ly)/h+0.5);
+                        xt=[xt max(ii-bf,1):min(ii+bf,GNx)];
+                        yt=[yt max(jj-bf,1):min(jj+bf,GNy)];
+                    end
+                end
+            end
+        % Merge with background grid
+        xt=unique([xt bgx]); yt=unique([yt bgy]);
+        % Update mesh and interpolate phi
+        newx=x(xt); newy=y(yt); Nx=length(xt); Ny=length(yt);
+        [xx1,yy1]=meshgrid(newx,newy);
+        % Bilinear interpolation
+        phi1=interp2(xx,yy,phi1',xx1,yy1)'; xx=xx1; yy=yy1;
+        end
+        % Compute nonuniform grid spacing and harmonic mean
+        p=newx(2:end)-newx(1:end-1);
+        p=[p(1) p p(end)];
+        ph=(p(1:end-1)+p(2:end))/2;
+        q=newy(2:end)-newy(1:end-1);
+        q=[q(1) q q(end)];
+        qh=(q(1:end-1)+q(2:end))/2;
+        % Construct 1D coefficients in x-direction
+        ax=zeros(1,Nx); bx=ax; cx=ax;
+        for i=1:Nx
+            ax(i)=-1/(ph(i)*p(i));
+            bx(i)=1/dt+2/(p(i+1)*p(i));
+            cx(i)=-1/(ph(i)*p(i+1));
+        end
+        % Construct 1D coefficients in y-direction
+        ay=zeros(1,Ny); by=ay; cy=ay;
+        for j=1:Ny
+            ay(j)=-1/(qh(j)*q(j));
+            by(j)=1/dt+2/(q(j+1)*q(j));
+            cy(j)=-1/(qh(j)*q(j+1));
+        end
+        % Neumann boundary condition modification
+        bx(1)=bx(1)+ax(1); bx(Nx)=bx(Nx)+cx(Nx);
+        by(1)=by(1)+ay(1); by(Ny)=by(Ny)+cy(Ny);
+    end
+    % Nonlinear stabilization step
+    phi1=phi1./sqrt((1-phi1.^2)*exp(-2*dt/epsilon^2)+phi1.^2);
+    % Solve implicit x-direction using Thomas algorithm
+    for j=1:Ny
+        f=phi1(1:Nx,j)/dt; phi1(1:Nx,j)=thomas(ax, bx, cx, f);
+    end
+    % Solve implicit y-direction using Thomas algorithm
+    for i=1:Nx
+        g=phi1(i,1:Ny)/dt; phi1(i,1:Ny)=thomas(ay, by, cy, g)';
+    end
+    % Visualization
+    if mod(iter,ns)==0
+    figure(3); clf; mesh(xx,yy,phi1'); view(-13,77)
+    axis([Lx Rx Ly Ry -1 1]); axis image;
+    figure(4); clf; mesh(xx,yy,phi1'); view(0,90); axis image;
+    end
+end
+% Thomas algorithm for tridiagonal linear system
+function x=thomas(alpha, beta, gamma, f)
+n=length(f);
+for i=2:n
+    mult=alpha(i)/beta(i-1);
+    beta(i)=beta(i)-mult*gamma(i-1);
+    f(i)=f(i)-mult*f(i-1);
+end
+x(n)=f(n)/beta(n);
+for i=n-1:-1:1
+    x(i)=(f(i)-gamma(i)*x(i+1))/beta(i);
+end
+end
